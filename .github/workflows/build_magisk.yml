@@ -1,51 +1,42 @@
 name: Build Magisk With Custom Package Name
 
 on:
-  workflow_dispatch:  # 手动触发编译（点一下就能跑）
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-15 # 必须用macOS，Ubuntu编译失败
     steps:
       - name: Checkout Magisk Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          submodules: true  # 必须拉取子模块
+          submodules: recursive
           fetch-depth: 0
 
       - name: Setup Build Environment
-        run: |
-          sudo apt update -y
-          sudo apt install -y python3 python3-pip git zip unzip jq
-          python3 -m pip install colorama
+        uses: ./.github/actions/setup
+        with:
+          is-asset-build: true
 
-      # ====================== 核心：修改包名 ======================
+      # ====================== 【修改你想要的包名】 ======================
       - name: Change Magisk Package Name
         run: |
-          # 【在这里修改成你想要的包名】
-          NEW_PKG="com.my.custom.magisk"
-          
-          # 替换所有包名配置文件
+          NEW_PKG="com.my.magisk" # 改成你自己的包名
+
           echo "New package name: $NEW_PKG"
-          
-          # 1. 修改主应用包名
-          sed -i "s/applicationId = \"com.topjohnwu.magisk\"/applicationId = \"$NEW_PKG\"/" app/core/build.gradle
-          
-          # 2. 修改 stub 包名（关键！不改会安装失败）
-          sed -i "s/\"com.topjohnwu.magisk\"/\"$NEW_PKG\"/" app/stub-res/src/main/AndroidManifest.xml
-          
-          # 3. 修改源码中硬编码的包名
-          grep -rl "com.topjohnwu.magisk" app/ | xargs sed -i "s/com.topjohnwu.magisk/$NEW_PKG/g"
 
-      # ====================== 开始编译 ======================
+          # 新版 Magisk 包名路径
+          sed -i '' "s/applicationId = \"com.topjohnwu.magisk\"/applicationId = \"$NEW_PKG\"/" app/build.gradle.kts
+          sed -i '' "s/\"com.topjohnwu.magisk\"/\"$NEW_PKG\"/" app/src/main/AndroidManifest.xml
+          find app -type f -name "*.kt" -o -name "*.java" | xargs sed -i '' "s/com.topjohnwu.magisk/$NEW_PKG/g"
+
+      # ====================== 编译 ======================
       - name: Build Magisk
-        run: |
-          chmod +x build.py
-          python3 build.py all
+        run: python3 build.py -vr all
 
-      # ====================== 上传编译产物 ======================
+      # ====================== 上传成品 ======================
       - name: Upload Build Output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: Magisk-Custom-Build
+          name: Magisk-Custom-Package
           path: out/
