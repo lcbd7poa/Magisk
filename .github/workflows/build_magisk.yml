@@ -1,9 +1,8 @@
-name: 自动修改包名 & 构建Magisk模块
-
+name: Magisk 自动构建 & 定制修改
 on:
   push:
-    branches: [ main ]  # 推送到main分支自动触发
-  workflow_dispatch:    # 支持手动触发
+    branches: [ master ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,88 +12,50 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: true
 
-      - name: 设置JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
-
-      - name: 配置Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      # ==============================================
-      # 核心：自动替换包名（支持所有文件批量替换）
-      # ==============================================
-      - name: 自动修改包名
+      - name: 安装依赖
         run: |
-          # 旧包名（你项目原来的包名）
-          OLD_PACKAGE="com.example.old"
-          # 新包名（你要改成的包名）
-          NEW_PACKAGE="com.example.new"
-          
-          # 批量替换 Java/Kotlin 源码
-          find app/src/main/java -name "*.java" -o -name "*.kt" | xargs sed -i "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g"
-          
-          # 替换清单文件包名
-          sed -i "s/package=\"${OLD_PACKAGE}\"/package=\"${NEW_PACKAGE}\"/g" app/src/main/AndroidManifest.xml
-          
-          # 替换 build.gradle 中的 applicationId
-          sed -i "s/applicationId\s*=\s*\"${OLD_PACKAGE}\"/applicationId = \"${NEW_PACKAGE}\"/g" app/build.gradle
-          sed -i "s/applicationId\s*'\s*${OLD_PACKAGE}\s*'/applicationId '${NEW_PACKAGE}'/g" app/build.gradle
-          
-          # 替换 res 资源里的包名引用
-          find app/src/main/res -name "*.xml" | xargs sed -i "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g"
-          
-          echo "✅ 包名已从 ${OLD_PACKAGE} 批量替换为 ${NEW_PACKAGE}"
+          sudo apt update -y
+          sudo apt install -y zip unzip tar git wget libncurses5
 
       # ==============================================
-      # 可选：自动修改指定源码文件（自定义代码替换）
+      # 核心：Magisk 源码自动修改（包名、字符串、文件）
       # ==============================================
-      - name: 自动修改指定源码
+      - name: 自动修改源码 & 包名
         run: |
-          # 示例1：修改 MainActivity.kt 里的内容
-          sed -i 's/原文本内容/替换后的新内容/g' app/src/main/java/com/example/new/MainActivity.kt
+          # ========== 你只需要改这里 ==========
+          OLD_PACKAGE="com.topjohnwu.magisk"
+          NEW_PACKAGE="com.yourname.magisk"
           
-          # 示例2：修改某个工具类
-          sed -i 's/oldString/newString/g' app/src/main/java/com/example/new/utils/Utils.kt
+          # 批量替换包名（适配 Magisk 真实目录结构）
+          echo "🔧 开始替换包名..."
+          find . -name "*.kt" -o -name "*.java" -o -name "*.xml" -o -name "*.gradle" | xargs sed -i "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g"
+
+          # 可选：自定义修改示例
+          # 示例：修改应用名称
+          sed -i 's/app_name>Magisk</app_name>MyMagisk</g' app/src/main/res/values/strings.xml
+          # 示例：修改包名
+          sed -i "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g" app/build.gradle.kts
           
-          echo "✅ 自定义源码修改完成"
+          echo "✅ 源码修改完成"
 
-      - name: 授予执行权限
-        run: chmod +x gradlew
-
-      - name: 构建APK
-        run: ./gradlew assembleRelease
-
-      # ==============================================
-      # 构建Magisk模块（适配标准Magisk模块结构）
-      # ==============================================
-      - name: 构建Magisk模块包
+      - name: 构建 Magisk
         run: |
-          # 创建Magisk模块目录结构
-          mkdir -p magisk_module/META-INF/com/google/android
-          mkdir -p magisk_module/system/bin
-          
-          # 复制模块文件
-          cp -r magisk/* magisk_module/  # 你仓库根目录magisk文件夹里的所有文件
-          cp app/build/outputs/apk/release/*.apk magisk_module/system/app/MyApp/MyApp.apk
-          
-          # 打包成Magisk卡刷包
-          cd magisk_module
-          zip -r -9 ../Magisk_Module_${{ github.sha }}.zip ./*
-          cd ..
-          
-          echo "✅ Magisk模块构建完成"
+          chmod +x gradlew
+          ./gradlew assembleRelease
+        
+      - name: 打包输出模块
+        run: |
+          mkdir -p output
+          cp app/build/outputs/apk/release/*.apk output/
+          zip -r -9 Magisk-Module.zip output/*
+          ls -al
 
-      # ==============================================
-      # 上传构建产物
-      # ==============================================
-      - name: 上传APK & Magisk模块
+      - name: 上传构建结果
         uses: actions/upload-artifact@v4
         with:
-          name: Build-Outputs
+          name: Magisk-Build
           path: |
-            app/build/outputs/apk/release/*.apk
             *.zip
+            app/build/outputs/apk/release/*.apk
