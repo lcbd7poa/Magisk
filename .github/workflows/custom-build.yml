@@ -1,0 +1,54 @@
+name: Custom Magisk Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: '自定义包名'
+        required: true
+        default: 'com.yourname.magisk'
+        type: string
+
+jobs:
+  custom-build:
+    name: Build with custom package name
+    runs-on: macos-26
+    
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+        with:
+          submodules: "recursive"
+
+      - name: Change package name
+        run: |
+          chmod +x change_package_name.sh
+          # 使用用户输入的包名，如果为空则使用默认值
+          PKG_NAME="${{ github.event.inputs.package_name }}"
+          if [ -z "$PKG_NAME" ]; then
+            PKG_NAME="com.yourname.magisk"
+          fi
+          ./change_package_name.sh "$PKG_NAME"
+          # 非交互模式，自动回答 'n' 不修改目录结构
+          echo "n" | ./change_package_name.sh "$PKG_NAME" || true
+
+      - name: Setup environment
+        uses: ./.github/actions/setup
+        with:
+          is-asset-build: true
+
+      - name: Build release
+        run: ./build.py -vr all
+
+      - name: Build debug  
+        run: ./build.py -v all
+
+      - name: Stop gradle daemon
+        run: ./app/gradlew --stop
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: magisk-custom-${{ github.event.inputs.package_name }}
+          path: out
+          compression-level: 9
