@@ -6,49 +6,70 @@ on:
       package_name:
         description: '自定义包名'
         required: true
-        default: 'com.yourname.magisk'
+        default: 'com.example.magisk'
         type: string
 
 jobs:
-  custom-build:
-    name: Build with custom package name
-    runs-on: macos-26
+  build:
+    runs-on: ubuntu-24.04
     
     steps:
-      - name: Check out
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
-          submodules: "recursive"
-
-      - name: Change package name
+          submodules: recursive
+      
+      - name: Change package name with Python
         run: |
-          chmod +x change_package_name.sh
-          # 使用用户输入的包名，如果为空则使用默认值
-          PKG_NAME="${{ github.event.inputs.package_name }}"
-          if [ -z "$PKG_NAME" ]; then
-            PKG_NAME="com.yourname.magisk"
-          fi
-          ./change_package_name.sh "$PKG_NAME"
-          # 非交互模式，自动回答 'n' 不修改目录结构
-          echo "n" | ./change_package_name.sh "$PKG_NAME" || true
-
+          # 创建 Python 脚本
+          cat > change_pkg.py << 'EOF'
+          #!/usr/bin/env python3
+          import os
+          import sys
+          from pathlib import Path
+          
+          old_pkg = "com.topjohnwu.magisk"
+          new_pkg = sys.argv[1]
+          
+          def replace_in_file(file_path):
+              try:
+                  with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                      content = f.read()
+                  if old_pkg not in content:
+                      return False
+                  new_content = content.replace(old_pkg, new_pkg)
+                  new_content = new_content.replace(f"{old_pkg}.stub", f"{new_pkg}.stub")
+                  with open(file_path, 'w', encoding='utf-8') as f:
+                      f.write(new_content)
+                  return True
+              except:
+                  return False
+          
+          extensions = ('.kt', '.kts', '.java', '.cpp', '.c', '.h', '.hpp', '.xml', '.gradle')
+          count = 0
+          
+          for root, dirs, files in os.walk('.'):
+              if '.git' in dirs:
+                  dirs.remove('.git')
+              for file in files:
+                  file_path = Path(root) / file
+                  if file_path.suffix in extensions or file in ['build.gradle', 'AndroidManifest.xml']:
+                      if replace_in_file(file_path):
+                          print(f"Modified: {file_path}")
+                          count += 1
+          
+          print(f"Modified {count} files")
+          EOF
+          
+          python3 change_pkg.py "${{ github.event.inputs.package_name }}"
+      
       - name: Setup environment
         uses: ./.github/actions/setup
-        with:
-          is-asset-build: true
-
-      - name: Build release
-        run: ./build.py -vr all
-
-      - name: Build debug  
+      
+      - name: Build
         run: ./build.py -v all
-
-      - name: Stop gradle daemon
-        run: ./app/gradlew --stop
-
-      - name: Upload build artifact
+      
+      - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: magisk-custom-${{ github.event.inputs.package_name }}
+          name: magisk-${{ github.event.inputs.package_name }}
           path: out
-          compression-level: 9
