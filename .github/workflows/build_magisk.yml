@@ -38,59 +38,18 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: 自动修改源码 & 包名
+      - name: 配置构建参数（官方方法）
         run: |
-          OLD_PKG="com.topjohnwu.magisk"
-          NEW_PKG="${{ github.event.inputs.new_package }}"
-          APP_NAME="${{ github.event.inputs.app_name }}"
+          # 创建 config.prop 文件来覆盖默认配置
+          cat > config.prop << EOF
+          # 自定义包名
+          magisk.applicationId=${{ github.event.inputs.new_package }}
+          # 自定义应用名称
+          magisk.appName=${{ github.event.inputs.app_name }}
+          EOF
           
-          echo "🔧 开始替换包名: $OLD_PKG -> $NEW_PKG"
-          echo "📱 应用名称: $APP_NAME"
-          
-          # 1. 先处理目录结构
-          NEW_PATH=$(echo $NEW_PKG | tr '.' '/')
-          
-          echo "步骤 1: 重组目录结构..."
-          for src_dir in app/apk/src/main/java app/apk-ng/src/main/java app/core/src/main/java app/shared/src/main/java app/stub/src/main/java; do
-            if [ -d "$src_dir/com/topjohnwu/magisk" ]; then
-              echo "  处理目录: $src_dir"
-              mkdir -p "$src_dir/$NEW_PATH"
-              cp -r "$src_dir/com/topjohnwu/magisk/"* "$src_dir/$NEW_PATH/" 2>/dev/null || true
-              rm -rf "$src_dir/com"
-            fi
-          done
-          
-          # 2. 修改源代码文件中的包名（排除 build-logic 目录）
-          echo "步骤 2: 替换源代码中的包名..."
-          find app -path "*/src/main/java/*" -type f \( -name "*.kt" -o -name "*.java" \) -exec sed -i "s/${OLD_PKG}/${NEW_PKG}/g" {} \;
-          
-          # 3. 修改 AndroidManifest.xml
-          echo "步骤 3: 修改 AndroidManifest.xml..."
-          find app -name "AndroidManifest.xml" -exec sed -i "s/${OLD_PKG}/${NEW_PKG}/g" {} \;
-          
-          # 4. 修改资源文件中的包名引用（排除 build-logic）
-          echo "步骤 4: 修改资源文件..."
-          find app -path "*/src/main/res/*" -name "*.xml" -exec sed -i "s/${OLD_PKG}/${NEW_PKG}/g" {} \;
-          
-          # 5. 修改 AIDL 文件
-          find app -name "*.aidl" -exec sed -i "s/${OLD_PKG}/${NEW_PKG}/g" {} \;
-          
-          # 6. 修改 Gradle 配置文件中的 applicationId 和 namespace（但不修改 build-logic）
-          echo "步骤 5: 修改 Gradle 配置..."
-          find app -name "build.gradle.kts" -path "*/app/*" -exec sed -i "s/applicationId = \"${OLD_PKG}\"/applicationId = \"${NEW_PKG}\"/g" {} \;
-          find app -name "build.gradle.kts" -path "*/app/*" -exec sed -i "s/namespace = \"${OLD_PKG}\"/namespace = \"${NEW_PKG}\"/g" {} \;
-          
-          # 7. 修改应用名称
-          echo "步骤 6: 修改应用名称..."
-          if [ -f "app/core/src/main/res/values/strings.xml" ]; then
-            sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">'"${APP_NAME}"'<\/string>/g' app/core/src/main/res/values/strings.xml
-          fi
-          
-          echo "✅ 源码修改完成"
-          
-          # 验证修改
-          echo "验证 app/apk/build.gradle.kts 是否完好:"
-          head -10 app/apk/build.gradle.kts
+          echo "✅ 配置文件已创建"
+          cat config.prop
 
       - name: 构建 Magisk
         run: |
@@ -101,19 +60,14 @@ jobs:
           # 验证 Java 版本
           java -version
           
-          # 进入 app 目录
+          # 使用配置文件构建
           cd app
           chmod +x gradlew
           
-          # 先查看 Gradle 配置是否正常
-          echo "检查 Gradle 配置..."
-          ./gradlew projects --no-daemon || echo "项目列表获取失败"
-          
-          # 直接构建
+          # 直接构建（不使用源码修改）
           echo "开始构建..."
           ./gradlew assembleRelease --stacktrace --no-daemon
           
-          # 返回根目录
           cd ..
 
       - name: 收集构建产物
@@ -121,7 +75,6 @@ jobs:
           mkdir -p output
           
           # 收集所有生成的 APK
-          echo "收集 APK 文件..."
           find . -type f -name "*.apk" -path "*/build/outputs/*" | while read apk; do
             cp "$apk" output/
             echo "  ✓ 复制: $(basename $apk)"
@@ -136,6 +89,8 @@ jobs:
             cd ..
           else
             echo "⚠️ 警告: 未找到 APK 文件"
+            # 调试：显示构建输出目录
+            find app -type d -name "outputs" -exec ls -la {} \;
           fi
 
       - name: 上传构建结果
