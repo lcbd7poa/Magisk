@@ -1,61 +1,68 @@
-name: Magisk 自动构建 & 定制修改
+name: Magisk Auto Build (Simplified)
 on:
-  push:
-    branches: [ master ]
   workflow_dispatch:
+    inputs:
+      new_package:
+        description: '新包名'
+        required: true
+        default: 'com.custom.magisk'
+      app_name:
+        description: '应用名称'
+        required: true
+        default: 'CustomMagisk'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04  # 使用 Ubuntu 22.04，兼容性更好
     steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: true
 
-      - name: 安装依赖
+      - name: 安装依赖 (Ubuntu 22.04)
         run: |
-          sudo apt update -y
-          sudo apt install -y zip unzip tar git wget libncurses5
+          sudo apt update
+          # Ubuntu 22.04 有 libncurses5
+          sudo apt install -y zip unzip tar git wget libncurses5 \
+            openjdk-17-jdk build-essential cmake python3
 
-      # ==============================================
-      # 核心：Magisk 源码自动修改（包名、字符串、文件）
-      # ==============================================
-      - name: 自动修改源码 & 包名
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: 修改包名
         run: |
-          # ========== 你只需要改这里 ==========
-          OLD_PACKAGE="com.topjohnwu.magisk"
-          NEW_PACKAGE="com.yourname.magisk"
+          OLD_PKG="com.topjohnwu.magisk"
+          NEW_PKG="${{ github.event.inputs.new_package }}"
+          APP_NAME="${{ github.event.inputs.app_name }}"
           
-          # 批量替换包名（适配 Magisk 真实目录结构）
-          echo "🔧 开始替换包名..."
-          find . -name "*.kt" -o -name "*.java" -o -name "*.xml" -o -name "*.gradle" | xargs sed -i "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g"
-
-          # 可选：自定义修改示例
-          # 示例：修改应用名称
-          sed -i 's/app_name>Magisk</app_name>MyMagisk</g' app/src/main/res/values/strings.xml
-          # 示例：修改包名
-          sed -i "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g" app/build.gradle.kts
+          # 替换文本内容
+          find . -type f \( -name "*.kt" -o -name "*.java" -o -name "*.xml" -o -name "*.gradle*" \) \
+            -exec sed -i "s/${OLD_PKG}/${NEW_PKG}/g" {} \;
           
-          echo "✅ 源码修改完成"
+          # 移动目录
+          NEW_PATH=$(echo $NEW_PKG | tr '.' '/')
+          for dir in app/apk/src/main/java app/core/src/main/java; do
+            if [ -d "$dir/com/topjohnwu/magisk" ]; then
+              mkdir -p "$dir/$NEW_PATH"
+              cp -r "$dir/com/topjohnwu/magisk/"* "$dir/$NEW_PATH/"
+              rm -rf "$dir/com"
+            fi
+          done
+          
+          # 改应用名
+          sed -i 's/app_name>Magisk</app_name>'"${APP_NAME}"'</g' \
+            app/core/src/main/res/values/strings.xml
 
-      - name: 构建 Magisk
+      - name: 构建
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
-        
-      - name: 打包输出模块
-        run: |
-          mkdir -p output
-          cp app/build/outputs/apk/release/*.apk output/
-          zip -r -9 Magisk-Module.zip output/*
-          ls -al
+          ./gradlew clean assembleRelease --no-daemon
 
-      - name: 上传构建结果
+      - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: Magisk-Build
-          path: |
-            *.zip
-            app/build/outputs/apk/release/*.apk
+          name: magisk-build
+          path: app/**/build/outputs/**/*.apk
