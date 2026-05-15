@@ -1,29 +1,29 @@
-name: Magisk Auto Build (Simplified)
+name: Magisk 自动构建 & 定制修改
 on:
   workflow_dispatch:
     inputs:
       new_package:
-        description: '新包名'
+        description: '新包名 (例如: com.yourname.magisk)'
         required: true
         default: 'com.custom.magisk'
       app_name:
-        description: '应用名称'
+        description: '应用显示名称'
         required: true
         default: 'CustomMagisk'
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 使用 Ubuntu 22.04，兼容性更好
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - name: 拉取代码
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: true
 
-      - name: 安装依赖 (Ubuntu 22.04)
+      - name: 安装依赖
         run: |
           sudo apt update
-          # Ubuntu 22.04 有 libncurses5
           sudo apt install -y zip unzip tar git wget libncurses5 \
             openjdk-17-jdk build-essential cmake python3
 
@@ -32,37 +32,92 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: 修改包名
+      - name: 自动修改源码 & 包名
         run: |
           OLD_PKG="com.topjohnwu.magisk"
           NEW_PKG="${{ github.event.inputs.new_package }}"
           APP_NAME="${{ github.event.inputs.app_name }}"
           
-          # 替换文本内容
-          find . -type f \( -name "*.kt" -o -name "*.java" -o -name "*.xml" -o -name "*.gradle*" \) \
+          echo "🔧 开始替换包名: $OLD_PKG -> $NEW_PKG"
+          echo "📱 应用名称: $APP_NAME"
+          
+          # 1. 替换所有文件中的包名
+          find . -type f \( -name "*.kt" -o -name "*.java" -o -name "*.xml" -o -name "*.gradle*" -o -name "*.aidl" -o -name "*.kts" \) \
             -exec sed -i "s/${OLD_PKG}/${NEW_PKG}/g" {} \;
           
-          # 移动目录
+          # 2. 修改 AndroidManifest.xml 中的 package 属性
+          find app -name "AndroidManifest.xml" -exec sed -i "s/package=\"${OLD_PKG}\"/package=\"${NEW_PKG}\"/g" {} \;
+          
+          # 3. 修改 build.gradle.kts 中的 applicationId 和 namespace
+          find app -name "build.gradle.kts" -exec sed -i "s/applicationId = \"${OLD_PKG}\"/applicationId = \"${NEW_PKG}\"/g" {} \;
+          find app -name "build.gradle.kts" -exec sed -i "s/namespace = \"${OLD_PKG}\"/namespace = \"${NEW_PKG}\"/g" {} \;
+          
+          # 4. 创建新的包名目录结构并移动文件
           NEW_PATH=$(echo $NEW_PKG | tr '.' '/')
-          for dir in app/apk/src/main/java app/core/src/main/java; do
-            if [ -d "$dir/com/topjohnwu/magisk" ]; then
-              mkdir -p "$dir/$NEW_PATH"
-              cp -r "$dir/com/topjohnwu/magisk/"* "$dir/$NEW_PATH/"
-              rm -rf "$dir/com"
+          OLD_PATH=$(echo $OLD_PKG | tr '.' '/')
+          
+          # 处理所有包含源码的目录
+          for src_dir in app/apk/src/main/java app/apk-ng/src/main/java app/core/src/main/java app/shared/src/main/java app/stub/src/main/java; do
+            if [ -d "$src_dir/com/topjohnwu/magisk" ]; then
+              echo "  处理目录: $src_dir"
+              mkdir -p "$src_dir/$NEW_PATH"
+              cp -r "$src_dir/com/topjohnwu/magisk/"* "$src_dir/$NEW_PATH/" 2>/dev/null || true
+              rm -rf "$src_dir/com"
             fi
           done
           
-          # 改应用名
-          sed -i 's/app_name>Magisk</app_name>'"${APP_NAME}"'</g' \
-            app/core/src/main/res/values/strings.xml
+          # 5. 修改应用名称
+          if [ -f "app/core/src/main/res/values/strings.xml" ]; then
+            sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">'"${APP_NAME}"'<\/string>/g' app/core/src/main/res/values/strings.xml
+          fi
+          
+          echo "✅ 源码修改完成"
 
-      - name: 构建
+      - name: 构建 Magisk
         run: |
+          # 进入 app 目录（gradlew 在这里）
+          cd app
           chmod +x gradlew
-          ./gradlew clean assembleRelease --no-daemon
+          
+          # 清理之前的构建
+          ./gradlew clean
+          
+          # 构建发布版本
+          ./gradlew assembleRelease --stacktrace
+          
+          # 返回根目录
+          cd ..
 
-      - name: 上传
+      - name: 收集构建产物
+        run: |
+          mkdir -p output
+          
+          # 收集所有生成的 APK
+          echo "收集 APK 文件..."
+          find . -type f -name "*.apk" -path "*/build/outputs/*" | while read apk; do
+            cp "$apk" output/
+            echo "  ✓ 复制: $(basename $apk)"
+          done
+          
+          # 列出所有产物
+          echo "=== 构建产物列表 ==="
+          ls -la output/
+          
+          # 打包成 ZIP
+          if [ -n "$(ls -A output/ 2>/dev/null)" ]; then
+            cd output
+            zip -r "../Magisk-${{ github.event.inputs.app_name }}-$(date +%Y%m%d-%H%M%S).zip" .
+            cd ..
+          else
+            echo "⚠️ 警告: 未找到 APK 文件"
+          fi
+
+      - name: 上传构建结果
         uses: actions/upload-artifact@v4
         with:
-          name: magisk-build
-          path: app/**/build/outputs/**/*.apk
+          name: Magisk-Custom-Build-${{ github.event.inputs.app_name }}
+          path: |
+            Magisk-*.zip
+            output/*.apk
+          retention-days: 7
+          if-no-files-found: warn
